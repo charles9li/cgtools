@@ -9,5 +9,5 @@ setup(
     keywords="molecular dynamics, coarse graining",
     packages=['cgtools'],
     python_requires=">=3.6",
-    install_requires=[]
+    install_requires=["numpy", "networkx", "mdtraj"]
 )
