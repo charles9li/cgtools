@@ -316,7 +316,18 @@ class TopologyMapper(object):
         if sim is None:
             raise ModuleNotFoundError("no module named 'sim'")
 
-        # first separate the CG topology into molecules
+        # create sim AtomTypes
+        sim_AtomTypes = {}
+        for cg_bead_name in self._unique_cg_bead_names:
+            sim_AtomTypes[cg_bead_name] = sim.chem.AtomType(cg_bead_name)
+
+        # create the position map
+        sim_PosMap = sim.atommap.PosMap()
+        for bead in sorted(self.cg_beads, key=lambda bead: bead.index):
+            sim_AtomMap = sim.atommap.AtomMap(list(bead.aa_indices), bead.index, Mass1=bead.aa_masses, Atom2Name=bead.name)
+            sim_PosMap.append(sim_AtomMap)
+
+        # separate the CG topology into molecules
         molecule_graphs = [self._cg_topology_graph.subgraph(c) for c in nx.connected_components(self._cg_topology_graph)]
 
         # iterate through molecules and find different molecule types
@@ -336,11 +347,6 @@ class TopologyMapper(object):
                 molecule_types.append(m_graph)
             molecule_type_index_in_topology.append(i_m_type)
 
-        # create sim AtomTypes
-        sim_AtomTypes = {}
-        for cg_bead_name in self._unique_cg_bead_names:
-            sim_AtomTypes[cg_bead_name] = sim.chem.AtomType(cg_bead_name)
-
         # convert molecule types to sim
         sim_MolTypes = []
         for i_mol_type, mol_type in enumerate(molecule_types):
@@ -355,7 +361,7 @@ class TopologyMapper(object):
             sim_System += sim_MolTypes[i_mol].New()
 
         # gather together everything into a topology
-        sim_topology = SimTopology(sim_AtomTypes, sim_MolTypes, sim_World, sim_System)
+        sim_topology = SimTopology(sim_AtomTypes, sim_PosMap, sim_MolTypes, sim_World, sim_System)
 
         return sim_topology
 
@@ -425,10 +431,21 @@ class SimTopology(object):
 
     Attributes
     ----------
+    sim_AtomTypes : dict
+        sim AtomTypes in the system.
+    sim_PosMap : sim.atommap.PosMap
+        Maps atomistic positions to CG positions.
+    sim_MolTypes : list of sim.chem.MolType
+        sim MolTypes in the System.
+    sim_World:
+        Contains chemical details.
+    sim_System:
+        Contains information about the box, integrator, etc.
     """
 
-    def __init__(self, sim_AtomTypes, sim_MolTypes, sim_World, sim_System):
+    def __init__(self, sim_AtomTypes, sim_PosMap, sim_MolTypes, sim_World, sim_System):
         self.sim_AtomTypes = sim_AtomTypes
+        self.sim_PosMap = sim_PosMap
         self.sim_MolTypes = sim_MolTypes
         self.sim_World = sim_World
         self.sim_System = sim_System
