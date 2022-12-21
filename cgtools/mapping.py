@@ -25,7 +25,7 @@ class CenterType(Enum):
     """A center-of-mass mapping is used."""
 
     Centroid = auto()
-    """Masses of atoms are ignored and when mapping AA positions to CG."""
+    """Masses of atoms are ignored when mapping AA positions to CG."""
 
 
 # set enums equal to exported variables
@@ -170,7 +170,9 @@ class TopologyMapper(object):
         return set(self._unique_residue_names) - set(self._residue_maps.keys())
 
     def create_map(self):
-        """Creates the atomistic-to-CG mapping. Only """
+        """Creates the atomistic-to-CG mapping. Only can be called when
+        mappings for all residues have been specified.
+        """
         # initialize graph of CG topology
         cg_top_graph = nx.Graph()
 
@@ -314,12 +316,15 @@ class TopologyMapper(object):
         at UCSB.
         """
         if sim is None:
-            raise ModuleNotFoundError("no module named 'sim'")
+            raise ModuleNotFoundError("no module named 'sim' found")
 
         # create sim AtomTypes
         sim_AtomTypes = {}
         for cg_bead_name in self._unique_cg_bead_names:
             sim_AtomTypes[cg_bead_name] = sim.chem.AtomType(cg_bead_name)
+
+        # create sim AtomNames
+        sim_AtomNames = [bead.name for bead in self.cg_beads]
 
         # create the position map
         sim_PosMap = sim.atommap.PosMap()
@@ -361,7 +366,7 @@ class TopologyMapper(object):
             sim_System += sim_MolTypes[i_mol].New()
 
         # gather together everything into a topology
-        sim_topology = SimTopology(sim_AtomTypes, sim_PosMap, sim_MolTypes, sim_World, sim_System)
+        sim_topology = SimTopology(sim_AtomTypes, sim_AtomNames, sim_PosMap, sim_MolTypes, sim_World, sim_System)
 
         return sim_topology
 
@@ -443,8 +448,9 @@ class SimTopology(object):
         Contains information about the box, integrator, etc.
     """
 
-    def __init__(self, sim_AtomTypes, sim_PosMap, sim_MolTypes, sim_World, sim_System):
+    def __init__(self, sim_AtomTypes, sim_AtomNames, sim_PosMap, sim_MolTypes, sim_World, sim_System):
         self.sim_AtomTypes = sim_AtomTypes
+        self.sim_AtomNames = sim_AtomNames
         self.sim_PosMap = sim_PosMap
         self.sim_MolTypes = sim_MolTypes
         self.sim_World = sim_World
