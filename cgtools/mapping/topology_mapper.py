@@ -5,6 +5,11 @@ import warnings
 from collections import defaultdict
 import itertools
 from enum import Enum, auto
+from typing import (
+    Iterator,
+    List,
+    Set
+)
 
 import numpy as np
 
@@ -72,9 +77,12 @@ class _ResidueMap(object):
     """
 
     def __init__(
-            self, name, cg_bead_names=None,
-            heavy_atom_indices_per_cg_bead=None, heavy_atom_masses=None,
-            mapping_type=None
+            self,
+            name: str,
+            cg_bead_names: List[str] = None,
+            heavy_atom_indices_per_cg_bead: List[List[int]] = None,
+            heavy_atom_masses: List[float] = None,
+            mapping_type: MappingType = None
     ):
         self.name = name
         self.cg_bead_names = cg_bead_names
@@ -94,7 +102,7 @@ class TopologyMapper(object):
         Set of all residues missing a specified mapping.
     """
 
-    def __init__(self, topology, mapping_type=CenterOfMass):
+    def __init__(self, topology: md.Topology, mapping_type: MappingType = CenterOfMass):
         """Initializes a TopologyMapper object.
 
         Parameters
@@ -114,27 +122,29 @@ class TopologyMapper(object):
         self._name_to_mass = {}
 
         # these will be set after create_map() is called
+        self._cg_topology = None
         self._cg_topology_graph = None
         self._unique_cg_bead_names = None
         self._aa_to_cg_bead_map = None
 
     @property
-    def aa_topology(self):
+    def aa_topology(self) -> md.Topology:
+        """MDTraj topology."""
         return self._aa_topology
 
     @property
-    def mapping_type(self):
+    def mapping_type(self) -> MappingType:
         """Specifies the method of mapping atomistic positions to a CG position."""
         return self._mapping_type
 
     @mapping_type.setter
-    def mapping_type(self, value):
+    def mapping_type(self, value: MappingType) -> None:
         """Setter for `mapping_type` attribute."""
         if not isinstance(value, MappingType):
             raise TypeError("`center_type` must be `CenterOfMass` or `Centroid`")
         self._mapping_type = value
 
-    def set_atom_mass(self, atom_name, mass):
+    def set_atom_mass(self, atom_name: str, mass: float) -> None:
         """Set the mass of an atomistic particle. Needed when using a
         `CenterOfMass` mapping with particles that are of non-conventional
         elements. This method can be also used to override masses of atoms that
@@ -149,7 +159,7 @@ class TopologyMapper(object):
         """
         self._name_to_mass[atom_name] = mass
 
-    def remove_atom_mass(self, atom_name):
+    def remove_atom_mass(self, atom_name: str) -> None:
         """Remove the mass of an atomistic particle that has already previously
         set.
 
@@ -164,10 +174,15 @@ class TopologyMapper(object):
             pass
 
     def add_residue_map(
-            self, residue_name, cg_bead_names,
-            n_heavy_atoms_per_cg_bead=None, heavy_atom_indices_per_cg_bead=None,
-            heavy_atom_masses=None, mapping_type=None, replace=False
-    ):
+            self,
+            residue_name: str,
+            cg_bead_names: List[str],
+            n_heavy_atoms_per_cg_bead: List[int] = None,
+            heavy_atom_indices_per_cg_bead: List[List[int]] = None,
+            heavy_atom_masses: List[float] = None,
+            mapping_type: MappingType = None,
+            replace: float = False
+    ) -> None:
         """Adds a CG mapping for an atomistic residue.
 
         Parameters
@@ -326,7 +341,7 @@ class TopologyMapper(object):
             mapping_type=mapping_type
         )
 
-    def get_residue_map(self, residue_name):
+    def get_residue_map(self, residue_name: str) -> _ResidueMap:
         """Retrieves the residue map for the specified residue name.
 
         Parameters
@@ -341,18 +356,24 @@ class TopologyMapper(object):
         return self._residue_maps[residue_name]
 
     @property
-    def residue_maps(self):
+    def residue_maps(self) -> Iterator[_ResidueMap]:
         """Iterates through all the specified residue maps."""
         return iter(self._residue_maps.values())
 
     @property
-    def unmapped_residues(self):
+    def unmapped_residues(self) -> Set[str]:
         """All residues missing a specified mapping."""
         return set(self._unique_residues.keys()) - set(self._residue_maps.keys())
 
-    def create_map(self, ignore_unmatched_residues=False):
+    def create_map(self, ignore_unmatched_residues: bool = False) -> None:
         """Creates the atomistic-to-CG mapping. Only can be called when
         mappings for all residues have been specified.
+
+        Parameters
+        ----------
+        ignore_unmatched_residues : bool, optional, default=False
+            Flag that specifies whether or not to ignore residues that don't
+            have a provided residue map.
         """
         # raise error if there are unmatched residues and not ignoring
         if not ignore_unmatched_residues and len(self.unmapped_residues) > 0:
@@ -362,6 +383,9 @@ class TopologyMapper(object):
 
         # initialize graph of CG topology
         cg_top_graph = nx.Graph()
+
+        # initialize CG topology in mdtraj format
+        cg_top = md.Topology()
 
         # initialize map for atomistic indices to CG beads
         aa_to_cg_map = {}
@@ -381,103 +405,109 @@ class TopologyMapper(object):
 
         # iterate through residues to add beads to the CG topology
         cg_bead_index = 0
-        for residue in self._aa_topology.residues:
-            # skip if no mapping available
-            if residue.name not in self._residue_maps.keys():
-                continue
+        for chain in self._aa_topology.chains:
+            cg_chain = cg_top.add_chain()
+            for residue in chain.residues:
+                # skip if no mapping available
+                if residue.name not in self._residue_maps.keys():
+                    continue
 
-            # get corresponding data from the residue map
-            _residue_map = self._residue_maps[residue.name]
+                # add residue to cg topology
+                cg_residue = cg_top.add_residue(residue.name, cg_chain)
 
-            # get indices of heavy atoms in residue
-            _selection_string = f"resid {residue.index} and element != H"
-            heavy_atom_indices_in_res = self._aa_topology.select(_selection_string)
+                # get corresponding data from the residue map
+                _residue_map = self._residue_maps[residue.name]
 
-            # check that the number of heavy atoms provided in the mapping is consistent
-            if sum([len(i) for i in _residue_map.heavy_atom_indices_per_cg_bead]) != len(heavy_atom_indices_in_res):
-                raise ValueError(
-                    f"number of heavy atoms specified does not match the "
-                    f"number of heavy atoms in residue {residue.name}-{residue.index}"
-                )
+                # get indices of heavy atoms in residue
+                _selection_string = f"resid {residue.index} and element != H"
+                heavy_atom_indices_in_res = self._aa_topology.select(_selection_string)
 
-            # check to see if residue has a different mapping type
-            if _residue_map.mapping_type is not None:
-                mapping_type = _residue_map.mapping_type
-            else:
-                mapping_type = self.mapping_type
-
-            # if providing masses, check that the number of heavy atom masses
-            # provided matches the total number of heavy atoms in the residue
-            # NOTE: only check if mapping type is center-of-mass
-            if mapping_type is CenterOfMass and _residue_map.heavy_atom_masses is not None:
-                if len(_residue_map.heavy_atom_masses) != len(heavy_atom_indices_in_res):
+                # check that the number of heavy atoms provided in the mapping is consistent
+                if sum([len(i) for i in _residue_map.heavy_atom_indices_per_cg_bead]) != len(heavy_atom_indices_in_res):
                     raise ValueError(
-                        f"number of heavy atom masses provided does not match "
-                        f"the number of heavy atoms in residue {residue.name}-{residue.index}"
+                        f"number of heavy atoms specified does not match the "
+                        f"number of heavy atoms in residue {residue.name}-{residue.index}"
                     )
 
-            # all masses set to 1 if centroid mapping
-            if mapping_type is Centroid:
-                heavy_atom_masses_in_res = np.ones_like(heavy_atom_indices_in_res)
-            # if COM mapping and masses not provided, find using elements of the atoms
-            elif mapping_type is CenterOfMass and _residue_map.heavy_atom_masses is None:
-                heavy_atom_masses_in_res = []
-                for i in heavy_atom_indices_in_res:
-                    try:
-                        mass_i = self._name_to_mass[self._aa_topology.atom(i).name]
-                    except KeyError:
-                        element_i = self._aa_topology.atom(i).element
-                        if element_i is md.element.virtual:
-                            name_i = self._aa_topology.atom(i).name
-                            raise ValueError(
-                                f"no mass found for atom {name_i} (index={i})"
-                            )
-                        mass_i = self._aa_topology.atom(i).element.mass
-                    heavy_atom_masses_in_res.append(mass_i)
-                heavy_atom_masses_in_res = np.array(heavy_atom_masses_in_res)
-            else:
-                heavy_atom_masses_in_res = _residue_map.heavy_atom_masses
+                # check to see if residue has a different mapping type
+                if _residue_map.mapping_type is not None:
+                    mapping_type = _residue_map.mapping_type
+                else:
+                    mapping_type = self.mapping_type
 
-            # determine split points and split heavy atom indices and masses between beads
-            heavy_atom_indices_split = [heavy_atom_indices_in_res[i] for i in _residue_map.heavy_atom_indices_per_cg_bead]
-            heavy_atom_masses_split = [heavy_atom_masses_in_res[i] for i in _residue_map.heavy_atom_indices_per_cg_bead]
+                # if providing masses, check that the number of heavy atom masses
+                # provided matches the total number of heavy atoms in the residue
+                # NOTE: only check if mapping type is center-of-mass
+                if mapping_type is CenterOfMass and _residue_map.heavy_atom_masses is not None:
+                    if len(_residue_map.heavy_atom_masses) != len(heavy_atom_indices_in_res):
+                        raise ValueError(
+                            f"number of heavy atom masses provided does not match "
+                            f"the number of heavy atoms in residue {residue.name}-{residue.index}"
+                        )
 
-            # iterate through CG beads in this residue
-            for i_bead_in_res in range(len(_residue_map.cg_bead_names)):
-                # get bead name lists of heavy atom indices and masses in bead
-                cg_bead_name = _residue_map.cg_bead_names[i_bead_in_res]
-                heavy_atom_indices_in_bead = heavy_atom_indices_split[i_bead_in_res]
-                heavy_atom_masses_in_bead = heavy_atom_masses_split[i_bead_in_res]
+                # all masses set to 1 if centroid mapping
+                if mapping_type is Centroid:
+                    heavy_atom_masses_in_res = np.ones_like(heavy_atom_indices_in_res)
+                # if COM mapping and masses not provided, find using elements of the atoms
+                elif mapping_type is CenterOfMass and _residue_map.heavy_atom_masses is None:
+                    heavy_atom_masses_in_res = []
+                    for i in heavy_atom_indices_in_res:
+                        try:
+                            mass_i = self._name_to_mass[self._aa_topology.atom(i).name]
+                        except KeyError:
+                            element_i = self._aa_topology.atom(i).element
+                            if element_i is md.element.virtual:
+                                name_i = self._aa_topology.atom(i).name
+                                raise ValueError(
+                                    f"no mass found for atom {name_i} (index={i})"
+                                )
+                            mass_i = self._aa_topology.atom(i).element.mass
+                        heavy_atom_masses_in_res.append(mass_i)
+                    heavy_atom_masses_in_res = np.array(heavy_atom_masses_in_res)
+                else:
+                    heavy_atom_masses_in_res = _residue_map.heavy_atom_masses
 
-                # add bead name if it hasn't been recorded already
-                if cg_bead_name not in unique_cg_bead_names:
-                    unique_cg_bead_names.append(cg_bead_name)
+                # determine split points and split heavy atom indices and masses between beads
+                heavy_atom_indices_split = [heavy_atom_indices_in_res[i] for i in _residue_map.heavy_atom_indices_per_cg_bead]
+                heavy_atom_masses_split = [heavy_atom_masses_in_res[i] for i in _residue_map.heavy_atom_indices_per_cg_bead]
 
-                # add indices and masses of hydrogen atoms
-                atom_indices_in_bead = []
-                atom_masses_in_bead = []
-                for i_atom, mass_i in zip(heavy_atom_indices_in_bead, heavy_atom_masses_in_bead):
-                    atom_indices_in_bead.append(i_atom)
-                    atom_masses_in_bead.append(mass_i)
-                    for i_hydrogen in h_atom_map[i_atom]:
-                        atom_indices_in_bead.append(i_hydrogen)
-                        if self.mapping_type is CenterOfMass:
-                            mass_hydrogen = self._aa_topology.atom(i_hydrogen).element.mass
-                            atom_masses_in_bead.append(mass_hydrogen)
-                        else:
-                            atom_masses_in_bead.append(1.0)
-                atom_indices_in_bead = np.array(atom_indices_in_bead, dtype=int)
-                atom_masses_in_bead = np.array(atom_masses_in_bead, dtype=float)
+                # iterate through CG beads in this residue
+                for i_bead_in_res in range(len(_residue_map.cg_bead_names)):
+                    # get bead name lists of heavy atom indices and masses in bead
+                    cg_bead_name = _residue_map.cg_bead_names[i_bead_in_res]
+                    heavy_atom_indices_in_bead = heavy_atom_indices_split[i_bead_in_res]
+                    heavy_atom_masses_in_bead = heavy_atom_masses_split[i_bead_in_res]
 
-                # add bead to CG topology
-                cg_bead = CGBead(cg_bead_name, cg_bead_index, atom_indices_in_bead, atom_masses_in_bead)
-                cg_top_graph.add_node(cg_bead, pair=cg_bead_name)
+                    # add bead name if it hasn't been recorded already
+                    if cg_bead_name not in unique_cg_bead_names:
+                        unique_cg_bead_names.append(cg_bead_name)
 
-                # map each atom to its respective CG bead
-                for i_atom in atom_indices_in_bead:
-                    aa_to_cg_map[i_atom] = cg_bead
+                    # add indices and masses of hydrogen atoms
+                    atom_indices_in_bead = []
+                    atom_masses_in_bead = []
+                    for i_atom, mass_i in zip(heavy_atom_indices_in_bead, heavy_atom_masses_in_bead):
+                        atom_indices_in_bead.append(i_atom)
+                        atom_masses_in_bead.append(mass_i)
+                        for i_hydrogen in h_atom_map[i_atom]:
+                            atom_indices_in_bead.append(i_hydrogen)
+                            if self.mapping_type is CenterOfMass:
+                                mass_hydrogen = self._aa_topology.atom(i_hydrogen).element.mass
+                                atom_masses_in_bead.append(mass_hydrogen)
+                            else:
+                                atom_masses_in_bead.append(1.0)
+                    atom_indices_in_bead = np.array(atom_indices_in_bead, dtype=int)
+                    atom_masses_in_bead = np.array(atom_masses_in_bead, dtype=float)
 
-                cg_bead_index += 1
+                    # add bead to CG topology
+                    cg_bead = CGBead(cg_bead_name, cg_bead_index, atom_indices_in_bead, atom_masses_in_bead)
+                    cg_top_graph.add_node(cg_bead, pair=cg_bead_name)
+                    cg_top.add_atom(cg_bead.name, md.element.virtual, cg_residue)
+
+                    # map each atom to its respective CG bead
+                    for i_atom in atom_indices_in_bead:
+                        aa_to_cg_map[i_atom] = cg_bead
+
+                    cg_bead_index += 1
 
         # before adding bonds, first raise warning if there are no bonds in the
         # atomistic topology
@@ -503,17 +533,25 @@ class TopologyMapper(object):
                 cg_bead_name_1 = cg_bead_1.name
                 name_pair = tuple(sorted([cg_bead_name_0, cg_bead_name_1]))
                 cg_top_graph.add_edge(cg_bead_0, cg_bead_1, name_pair=name_pair)
+                cg_top.add_bond(cg_top.atom(cg_bead_0.index), cg_top.atom(cg_bead_1.index))
 
         # save to private attributes
+        self._cg_topology = cg_top
         self._cg_topology_graph = cg_top_graph
         self._aa_to_cg_bead_map = aa_to_cg_map
         self._unique_cg_bead_names = unique_cg_bead_names
 
     @property
-    def cg_beads(self):
+    def cg_beads(self) -> Iterator['CGBead']:
         if self._cg_topology_graph is None:
             raise AttributeError("must call `create_map` method before accessing this attribute")
         return iter(self._cg_topology_graph.nodes(data=False))
+
+    @property
+    def n_cg_beads(self) -> int:
+        if self._cg_topology_graph is None:
+            raise AttributeError("must call `create_map` method before accessing this attribute")
+        return len(list(self.cg_beads))
 
     @property
     def cg_bonds(self):
@@ -521,7 +559,19 @@ class TopologyMapper(object):
             raise AttributeError("must call `create_map` method before accessing this attribute")
         return iter(self._cg_topology_graph.edges(data=False))
 
-    def to_sim(self):
+    @property
+    def cg_topology(self) -> md.Topology:
+        if self._cg_topology_graph is None:
+            raise AttributeError("must call `create_map` method before accessing this attribute")
+        return self._cg_topology
+
+    @property
+    def cg_topology_graph(self) -> nx.Graph:
+        if self._cg_topology_graph is None:
+            raise AttributeError("must call `create_map` method before accessing this attribute")
+        return self._cg_topology_graph
+
+    def to_sim(self) -> 'SimTopology':
         """Create a representation of the CG topology in the format of sim, a
         relative-entropy coarse graining package developed by the Shell Group
         at UCSB.
@@ -582,7 +632,11 @@ class TopologyMapper(object):
         return sim_topology
 
 
-def _convert_molecule_graph_to_sim_MolType(molecule_index, molecule_graph, sim_AtomTypes):
+def _convert_molecule_graph_to_sim_MolType(
+        molecule_index: int,
+        molecule_graph: nx.Graph,
+        sim_AtomTypes: dict
+):
     """Utility function that converts a graph representation of a CG molecule
     to a sim MolType.
 
@@ -635,7 +689,7 @@ class CGBead(object):
         positions to the position of this CGBead.
     """
 
-    def __init__(self, name, index, aa_indices, aa_masses):
+    def __init__(self, name: str, index: int, aa_indices: List[int], aa_masses: List[float]):
         self.name = name
         self.index = index
         self.aa_indices = aa_indices
