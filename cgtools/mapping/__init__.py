@@ -3,3 +3,4 @@ from cgtools.mapping.topology_mapper import (
     Centroid,
     TopologyMapper
 )
+from cgtools.mapping.trajectory_mapper import map_trajectory
